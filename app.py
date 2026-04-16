@@ -18,8 +18,8 @@ _whisper_model = None
 def get_whisper():
     global _whisper_model
     if _whisper_model is None:
-        import whisper
-        _whisper_model = whisper.load_model("tiny")
+        from faster_whisper import WhisperModel
+        _whisper_model = WhisperModel("tiny", device="cpu", compute_type="int8")
     return _whisper_model
 
 # ============================================================================
@@ -198,8 +198,8 @@ def analyze(user_path, ref_path, ayet_no: int = None):
     stt_note = None
     try:
         model = get_whisper()
-        result = model.transcribe(user_path, language="ar", fp16=False)
-        transcribed = result.get("text", "").strip()
+        segments, _ = model.transcribe(user_path, language="ar")
+        transcribed = " ".join([s.text for s in segments]).strip()
         if ayet_no and ayet_no in FATIHA_TEXTS:
             expected = FATIHA_TEXTS[ayet_no]
             sim = text_similarity(transcribed, expected)
