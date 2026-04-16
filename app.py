@@ -191,6 +191,7 @@ def analyze(user_path, ref_path, ayet_no: int = None):
     stt_score = None
     transcribed = None
     stt_note = None
+    stt_error = None
     try:
         if GROQ_API_KEY:
             from groq import Groq
@@ -213,8 +214,9 @@ def analyze(user_path, ref_path, ayet_no: int = None):
                     stt_note = '🔤 Metin: Bazı kelimeler eksik veya yanlış'
                 else:
                     stt_note = '✅ Metin: Doğru okundu'
-    except Exception:
-        pass
+    except Exception as e:
+        import traceback
+        stt_error = traceback.format_exc()
 
     # --- TOPLAM ---
     if stt_score is not None:
@@ -249,6 +251,7 @@ def analyze(user_path, ref_path, ayet_no: int = None):
         'harf':     {'score': int(harf_score), 'level': get_level(harf_score)},
         'notes': notes,
         'transcribed': transcribed,
+        'stt_error': stt_error,
         'debug': {
             'user_dur_ms': int(u_dur), 'ref_dur_ms': int(r_dur),
             'dur_ratio': round(ratio,2), 'dur_score': round(dur_score,1),
