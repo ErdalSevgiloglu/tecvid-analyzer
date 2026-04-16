@@ -395,9 +395,11 @@ def analyze_audio():
             os.unlink(ref_path)
     
     except Exception as e:
+        import traceback
         return jsonify({
             'success': False,
-            'error': str(e)
+            'error': str(e),
+            'trace': traceback.format_exc()
         }), 500
 
 @app.route('/health', methods=['GET'])

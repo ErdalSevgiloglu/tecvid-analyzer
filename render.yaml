@@ -2,7 +2,7 @@ services:
   - type: web
     name: tecvid-backend
     runtime: python
-    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    buildCommand: apt-get install -y ffmpeg && pip install --upgrade pip && pip install -r requirements.txt
     startCommand: gunicorn tecvid_backend:app --bind 0.0.0.0:$PORT
     envVars:
       - key: PYTHON_VERSION
