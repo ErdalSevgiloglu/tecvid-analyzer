@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:record/record.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:http/http.dart' as http;
+import 'package:audioplayers/audioplayers.dart';
 import 'dart:convert';
 import 'tecvid_analyzer.dart';
 
@@ -88,11 +89,14 @@ class _TecvidAnalyzerScreenState extends State<TecvidAnalyzerScreen> {
   final Map<int, String?> _errors = {};
 
   final _audioRecorder = AudioRecorder();
+  final _audioPlayer = AudioPlayer();
   int? _activeRecordingAyet;
+  int? _playingAyet;
 
   @override
   void dispose() {
     _audioRecorder.dispose();
+    _audioPlayer.dispose();
     super.dispose();
   }
 
@@ -141,6 +145,19 @@ class _TecvidAnalyzerScreenState extends State<TecvidAnalyzerScreen> {
     }
   }
 
+  Future<void> _playReference(int ayetNo, String assetPath) async {
+    if (_playingAyet == ayetNo) {
+      await _audioPlayer.stop();
+      setState(() => _playingAyet = null);
+      return;
+    }
+    setState(() => _playingAyet = ayetNo);
+    await _audioPlayer.play(AssetSource(assetPath.replaceFirst('assets/', '')));
+    _audioPlayer.onPlayerComplete.listen((_) {
+      if (mounted) setState(() => _playingAyet = null);
+    });
+  }
+
   Future<void> _analyze(int ayetNo, String referenceAsset) async {
     final recordingPath = _recordingPaths[ayetNo];
     if (recordingPath == null) return;
@@ -181,8 +198,13 @@ class _TecvidAnalyzerScreenState extends State<TecvidAnalyzerScreen> {
           );
         });
       } else {
-        final error = jsonDecode(response.body);
-        setState(() => _errors[ayetNo] = error['error'] ?? 'Analiz başarısız');
+        // HTML veya JSON olmayan yanıt gelebilir
+        String errMsg = 'Sunucu hatası (${response.statusCode})';
+        try {
+          final error = jsonDecode(response.body);
+          errMsg = error['error'] ?? errMsg;
+        } catch (_) {}
+        setState(() => _errors[ayetNo] = errMsg);
       }
     } catch (e) {
       setState(() => _errors[ayetNo] = 'İstek hatası: $e');
@@ -303,10 +325,16 @@ class _TecvidAnalyzerScreenState extends State<TecvidAnalyzerScreen> {
                 const SizedBox(width: 8),
                 // Dinle butonu
                 _circleButton(
-                  icon: Icons.volume_up_rounded,
-                  color: const Color(0xFF1e3a5f),
-                  iconColor: const Color(0xFF60a5fa),
-                  onTap: () {/* TODO: ses çal */},
+                  icon: _playingAyet == ayet.number
+                      ? Icons.stop_rounded
+                      : Icons.volume_up_rounded,
+                  color: _playingAyet == ayet.number
+                      ? const Color(0xFF1e5f3d)
+                      : const Color(0xFF1e3a5f),
+                  iconColor: _playingAyet == ayet.number
+                      ? const Color(0xFF4ade80)
+                      : const Color(0xFF60a5fa),
+                  onTap: () => _playReference(ayet.number, ayet.audioAsset),
                 ),
                 const SizedBox(width: 8),
                 // Ayet numarası
