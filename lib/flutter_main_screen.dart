@@ -2,12 +2,74 @@ import 'package:flutter/material.dart';
 import 'package:record/record.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:http/http.dart' as http;
-import 'dart:io';
 import 'dart:convert';
 import 'tecvid_analyzer.dart';
 
 // ============================================================================
-// ANA SCREEN - TECVİD ANALYZER
+// FATIHA AYETLERİ VERİSİ
+// ============================================================================
+
+class AyetData {
+  final int number;
+  final String arabic;
+  final String transliteration;
+  final String audioAsset;
+
+  const AyetData({
+    required this.number,
+    required this.arabic,
+    required this.transliteration,
+    required this.audioAsset,
+  });
+}
+
+const List<AyetData> fatihaAyetleri = [
+  AyetData(
+    number: 1,
+    arabic: 'بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ',
+    transliteration: 'bismillahirrahmanirrahim',
+    audioAsset: 'assets/audios/Fatiha/1.mp3',
+  ),
+  AyetData(
+    number: 2,
+    arabic: 'الْحَمْدُ لِلَّهِ رَبِّ الْعَالَمِينَ',
+    transliteration: 'alhamdu lillahi rabbil alamin',
+    audioAsset: 'assets/audios/Fatiha/2.mp3',
+  ),
+  AyetData(
+    number: 3,
+    arabic: 'الرَّحْمَٰنِ الرَّحِيمِ',
+    transliteration: 'arrahmanirrahim',
+    audioAsset: 'assets/audios/Fatiha/3.mp3',
+  ),
+  AyetData(
+    number: 4,
+    arabic: 'مَالِكِ يَوْمِ الدِّينِ',
+    transliteration: 'maliki yawmiddin',
+    audioAsset: 'assets/audios/Fatiha/4.mp3',
+  ),
+  AyetData(
+    number: 5,
+    arabic: 'إِيَّاكَ نَعْبُدُ وَإِيَّاكَ نَسْتَعِينُ',
+    transliteration: 'iyyaka nabudu wa iyyaka nastain',
+    audioAsset: 'assets/audios/Fatiha/5.mp3',
+  ),
+  AyetData(
+    number: 6,
+    arabic: 'اهْدِنَا الصِّرَاطَ الْمُسْتَقِيمَ',
+    transliteration: 'ihdinas siratal mustaqim',
+    audioAsset: 'assets/audios/Fatiha/6.mp3',
+  ),
+  AyetData(
+    number: 7,
+    arabic: 'صِرَاطَ الَّذِينَ أَنْعَمْتَ عَلَيْهِمْ غَيْرِ الْمَغْضُوبِ عَلَيْهِمْ وَلَا الضَّالِّينَ',
+    transliteration: 'siratal lazina anamta alayhim ghayril maghdubi alayhim wa lad dallin',
+    audioAsset: 'assets/audios/Fatiha/7.mp3',
+  ),
+];
+
+// ============================================================================
+// ANA SCREEN
 // ============================================================================
 
 class TecvidAnalyzerScreen extends StatefulWidget {
@@ -16,20 +78,17 @@ class TecvidAnalyzerScreen extends StatefulWidget {
 }
 
 class _TecvidAnalyzerScreenState extends State<TecvidAnalyzerScreen> {
-  final _audioRecorder = AudioRecorder();
-  
-  String? _recordingPath;
-  bool _isRecording = false;
-  bool _isAnalyzing = false;
-  
-  TecvidAnalysisResult? _result;
-  String? _errorMessage;
-  
-  // Flask backend URL
   static const String BACKEND_URL = 'https://tecvid-backend.onrender.com';
-  
-  // Referans ses dosyaları (örneğin assets'ten)
-  static const String REFERENCE_AUDIO_PATH = 'assets/audios/bismillah_reference.wav';
+
+  // Her ayet için kayıt durumu
+  final Map<int, bool> _isRecording = {};
+  final Map<int, bool> _isAnalyzing = {};
+  final Map<int, String?> _recordingPaths = {};
+  final Map<int, TecvidAnalysisResult?> _results = {};
+  final Map<int, String?> _errors = {};
+
+  final _audioRecorder = AudioRecorder();
+  int? _activeRecordingAyet;
 
   @override
   void dispose() {
@@ -37,80 +96,83 @@ class _TecvidAnalyzerScreenState extends State<TecvidAnalyzerScreen> {
     super.dispose();
   }
 
-  Future<void> _startRecording() async {
+  Future<void> _startRecording(int ayetNo) async {
     try {
       final isPermitted = await _audioRecorder.hasPermission();
       if (!isPermitted) {
-        setState(() => _errorMessage = 'Mikrofon izni gerekli');
+        setState(() => _errors[ayetNo] = 'Mikrofon izni gerekli');
         return;
       }
 
+      // Başka ayet kaydediliyorsa durdur
+      if (_activeRecordingAyet != null && _activeRecordingAyet != ayetNo) {
+        await _stopRecording(_activeRecordingAyet!);
+      }
+
       final tempDir = await getTemporaryDirectory();
-      _recordingPath = '${tempDir.path}/user_recording.wav';
+      final path = '${tempDir.path}/ayet_$ayetNo.wav';
 
       await _audioRecorder.start(
-        RecordConfig(
-          encoder: AudioEncoder.wav,
-          bitRate: 128000,
-          sampleRate: 44100,
-        ),
-        path: _recordingPath!,
+        RecordConfig(encoder: AudioEncoder.wav, sampleRate: 44100),
+        path: path,
       );
 
-      setState(() => _isRecording = true);
+      setState(() {
+        _isRecording[ayetNo] = true;
+        _activeRecordingAyet = ayetNo;
+        _errors[ayetNo] = null;
+        _results[ayetNo] = null;
+      });
     } catch (e) {
-      setState(() => _errorMessage = 'Kayıt başlatılamadı: $e');
+      setState(() => _errors[ayetNo] = 'Kayıt başlatılamadı: $e');
     }
   }
 
-  Future<void> _stopRecording() async {
+  Future<void> _stopRecording(int ayetNo) async {
     try {
       final path = await _audioRecorder.stop();
       setState(() {
-        _isRecording = false;
-        _recordingPath = path;
+        _isRecording[ayetNo] = false;
+        _recordingPaths[ayetNo] = path;
+        _activeRecordingAyet = null;
       });
     } catch (e) {
-      setState(() => _errorMessage = 'Kayıt durdurulurken hata: $e');
+      setState(() => _errors[ayetNo] = 'Kayıt durdurulamadı: $e');
     }
   }
 
-  Future<void> _analyzeWithBackend() async {
-    if (_recordingPath == null) {
-      setState(() => _errorMessage = 'Önce ses kaydı yapın');
-      return;
-    }
+  Future<void> _analyze(int ayetNo, String referenceAsset) async {
+    final recordingPath = _recordingPaths[ayetNo];
+    if (recordingPath == null) return;
 
     setState(() {
-      _isAnalyzing = true;
-      _errorMessage = null;
+      _isAnalyzing[ayetNo] = true;
+      _errors[ayetNo] = null;
     });
 
     try {
-      // Multipart request hazırlama
       var request = http.MultipartRequest('POST', Uri.parse('$BACKEND_URL/analyze'));
 
-      // Kullanıcı sesi ekle
       request.files.add(
-        await http.MultipartFile.fromPath('user_audio', _recordingPath!),
+        await http.MultipartFile.fromPath('user_audio', recordingPath),
       );
 
-      // Referans sesi ekle (assets'ten veya sunucudan)
-      // Bu örnekte sunucudan alıyoruz
-      final refBytes = await _downloadReferenceAudio();
+      final refBytes = await DefaultAssetBundle.of(context).load(referenceAsset);
       request.files.add(
-        http.MultipartFile.fromBytes('reference_audio', refBytes, filename: 'reference.wav'),
+        http.MultipartFile.fromBytes(
+          'reference_audio',
+          refBytes.buffer.asUint8List(),
+          filename: 'reference.wav',
+        ),
       );
 
-      // Request gönder
       final streamedResponse = await request.send();
       final response = await http.Response.fromStream(streamedResponse);
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        
         setState(() {
-          _result = TecvidAnalysisResult(
+          _results[ayetNo] = TecvidAnalysisResult(
             totalScore: data['totalScore'],
             telaffuzScore: data['telaffuz']['level'],
             medScore: data['med']['level'],
@@ -120,293 +182,346 @@ class _TecvidAnalyzerScreenState extends State<TecvidAnalyzerScreen> {
         });
       } else {
         final error = jsonDecode(response.body);
-        setState(() => _errorMessage = error['error'] ?? 'Analiz başarısız');
+        setState(() => _errors[ayetNo] = error['error'] ?? 'Analiz başarısız');
       }
     } catch (e) {
-      setState(() => _errorMessage = 'İstek hatası: $e');
+      setState(() => _errors[ayetNo] = 'İstek hatası: $e');
     } finally {
-      setState(() => _isAnalyzing = false);
+      setState(() => _isAnalyzing[ayetNo] = false);
     }
-  }
-
-  Future<List<int>> _downloadReferenceAudio() async {
-    // Sunucudaki referans ses dosyasını indir
-    // Veya assets'ten oku
-    final assetData = await DefaultAssetBundle.of(context)
-        .load(REFERENCE_AUDIO_PATH);
-    return assetData.buffer.asUint8List();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0f1f35),
+      backgroundColor: const Color(0xFF0d1b2e),
       body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            children: [
-              // BAŞLIK
-              _buildHeader(),
-              const SizedBox(height: 40),
-
-              // KAYıT KONTROLÜ
-              if (_result == null) ...[
-                _buildRecordingSection(),
-                const SizedBox(height: 30),
-              ],
-
-              // SONUÇ
-              if (_result != null) ...[
-                TecvidResultWidget(result: _result!),
-                const SizedBox(height: 20),
-                _buildReplayButton(),
-              ],
-
-              // HATA MESAJI
-              if (_errorMessage != null) ...[
-                const SizedBox(height: 20),
-                _buildErrorMessage(),
-              ],
-
-              // YÜKLENİYOR
-              if (_isAnalyzing) ...[
-                const SizedBox(height: 20),
-                _buildLoadingIndicator(),
-              ],
-            ],
-          ),
+        child: Column(
+          children: [
+            _buildHeader(),
+            Expanded(
+              child: ListView.separated(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                itemCount: fatihaAyetleri.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 12),
+                itemBuilder: (context, index) {
+                  final ayet = fatihaAyetleri[index];
+                  return _buildAyetCard(ayet);
+                },
+              ),
+            ),
+          ],
         ),
       ),
     );
   }
 
   Widget _buildHeader() {
-    return Column(
-      children: [
-        const Text(
-          'Tecvid Analizörü',
-          style: TextStyle(
-            fontSize: 28,
-            fontWeight: FontWeight.bold,
-            color: Colors.white,
-          ),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          'Kur\'an tilavetinizi analiz edin',
-          style: TextStyle(
-            fontSize: 14,
-            color: Colors.white60,
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildRecordingSection() {
-    return Column(
-      children: [
-        // KAYIT DURUMU
-        Container(
-          padding: const EdgeInsets.all(20),
-          decoration: BoxDecoration(
-            color: const Color(0xFF1a2d4d),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: _isRecording
-                  ? const Color(0xFFef4444).withOpacity(0.5)
-                  : const Color(0xFF60a5fa).withOpacity(0.3),
-              width: 2,
-            ),
-          ),
-          child: Column(
-            children: [
-              if (_isRecording)
-                Container(
-                  width: 80,
-                  height: 80,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: const Color(0xFFef4444).withOpacity(0.1),
-                  ),
-                  child: Center(
-                    child: Container(
-                      width: 60,
-                      height: 60,
-                      decoration: const BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: Color(0xFFef4444),
-                      ),
-                      child: const Icon(Icons.fiber_manual_record,
-                          color: Colors.white, size: 28),
-                    ),
-                  ),
-                )
-              else
-                Container(
-                  width: 80,
-                  height: 80,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: LinearGradient(
-                      colors: [
-                        const Color(0xFF60a5fa).withOpacity(0.3),
-                        const Color(0xFF3b82f6).withOpacity(0.1),
-                      ],
-                    ),
-                  ),
-                  child: const Icon(Icons.mic, color: Color(0xFF60a5fa), size: 40),
-                ),
-              const SizedBox(height: 16),
-              Text(
-                _isRecording ? 'Kaydediliyor...' : 'Kayıt yapmaya hazır',
-                style: TextStyle(
-                  fontSize: 16,
-                  color: Colors.white70,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 24),
-
-        // KONTROL BUTONLARI
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            ElevatedButton.icon(
-              onPressed: _isRecording ? null : _startRecording,
-              icon: const Icon(Icons.mic),
-              label: const Text('Başla'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF60a5fa),
-                foregroundColor: Colors.white,
-                disabledBackgroundColor: Colors.grey,
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-              ),
-            ),
-            const SizedBox(width: 16),
-            ElevatedButton.icon(
-              onPressed: _isRecording ? _stopRecording : null,
-              icon: const Icon(Icons.stop),
-              label: const Text('Durdur'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFef4444),
-                foregroundColor: Colors.white,
-                disabledBackgroundColor: Colors.grey,
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 24),
-
-        // ANALİZ BUTONU
-        SizedBox(
-          width: double.infinity,
-          child: ElevatedButton.icon(
-            onPressed: (_recordingPath != null && !_isAnalyzing && !_isRecording)
-                ? _analyzeWithBackend
-                : null,
-            icon: const Icon(Icons.analytics),
-            label: const Text('Analiz Et'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF4ade80),
-              foregroundColor: Colors.black,
-              disabledBackgroundColor: Colors.grey,
-              padding: const EdgeInsets.symmetric(vertical: 14),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildReplayButton() {
-    return SizedBox(
-      width: double.infinity,
-      child: ElevatedButton.icon(
-        onPressed: () {
-          setState(() {
-            _result = null;
-            _recordingPath = null;
-            _errorMessage = null;
-          });
-        },
-        icon: const Icon(Icons.refresh),
-        label: const Text('Yeniden Dene'),
-        style: ElevatedButton.styleFrom(
-          backgroundColor: const Color(0xFF60a5fa),
-          foregroundColor: Colors.white,
-          padding: const EdgeInsets.symmetric(vertical: 14),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildErrorMessage() {
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
       decoration: BoxDecoration(
-        color: const Color(0xFFef4444).withOpacity(0.1),
-        border: Border.all(
-          color: const Color(0xFFef4444).withOpacity(0.5),
-          width: 1,
+        color: const Color(0xFF0d1b2e),
+        border: Border(
+          bottom: BorderSide(
+            color: Colors.white.withOpacity(0.08),
+            width: 1,
+          ),
         ),
-        borderRadius: BorderRadius.circular(12),
       ),
       child: Row(
         children: [
-          const Icon(Icons.error_outline, color: Color(0xFFef4444)),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              _errorMessage!,
-              style: const TextStyle(
-                color: Colors.white70,
-                fontSize: 13,
-              ),
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: const Color(0xFF1e3a5f),
             ),
+            child: const Icon(Icons.menu_book, color: Color(0xFF60a5fa), size: 20),
+          ),
+          const SizedBox(width: 12),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Sûre-i Fâtiha',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                ),
+              ),
+              Text(
+                '7 Ayet • Tecvid Analizi',
+                style: TextStyle(fontSize: 12, color: Colors.white38),
+              ),
+            ],
           ),
         ],
       ),
     );
   }
 
-  Widget _buildLoadingIndicator() {
+  Widget _buildAyetCard(AyetData ayet) {
+    final isRec = _isRecording[ayet.number] ?? false;
+    final isAna = _isAnalyzing[ayet.number] ?? false;
+    final hasRec = _recordingPaths[ayet.number] != null;
+    final result = _results[ayet.number];
+    final error = _errors[ayet.number];
+
     return Container(
-      padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: const Color(0xFF1a2d4d),
-        borderRadius: BorderRadius.circular(12),
+        color: const Color(0xFF132035),
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: const Color(0xFF60a5fa).withOpacity(0.3),
-          width: 1,
+          color: isRec
+              ? const Color(0xFFef4444).withOpacity(0.5)
+              : Colors.white.withOpacity(0.07),
+          width: 1.5,
         ),
       ),
       child: Column(
         children: [
-          const CircularProgressIndicator(
-            valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF60a5fa)),
-          ),
-          const SizedBox(height: 16),
-          const Text(
-            'Ses analiz ediliyor...',
-            style: TextStyle(
-              color: Colors.white70,
-              fontSize: 14,
+          // ÜST KISIM: Ayet numarası + butonlar
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 12, 0),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(child: const SizedBox()),
+                // Mikrofon butonu
+                _circleButton(
+                  icon: isRec ? Icons.stop : Icons.mic,
+                  color: isRec ? const Color(0xFFef4444) : const Color(0xFF1e3a5f),
+                  iconColor: isRec ? Colors.white : const Color(0xFF60a5fa),
+                  onTap: isAna
+                      ? null
+                      : () => isRec
+                          ? _stopRecording(ayet.number)
+                          : _startRecording(ayet.number),
+                ),
+                const SizedBox(width: 8),
+                // Dinle butonu
+                _circleButton(
+                  icon: Icons.volume_up_rounded,
+                  color: const Color(0xFF1e3a5f),
+                  iconColor: const Color(0xFF60a5fa),
+                  onTap: () {/* TODO: ses çal */},
+                ),
+                const SizedBox(width: 8),
+                // Ayet numarası
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: const Color(0xFF1e3a5f),
+                  ),
+                  child: Center(
+                    child: Text(
+                      '${ayet.number}',
+                      style: const TextStyle(
+                        color: Color(0xFF60a5fa),
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
+
+          // ARAPÇA METİN
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+            child: Text(
+              ayet.arabic,
+              textAlign: TextAlign.right,
+              textDirection: TextDirection.rtl,
+              style: const TextStyle(
+                fontSize: 26,
+                color: Colors.white,
+                height: 1.8,
+                fontFamily: 'Scheherazade',
+              ),
+            ),
+          ),
+
+          // TRANSLİTERASYON
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+            child: Text(
+              ayet.transliteration,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 13,
+                color: Colors.white38,
+                fontStyle: FontStyle.italic,
+              ),
+            ),
+          ),
+
+          // KAYIT SONRASI ANALİZ BUTONU
+          if (hasRec && result == null && !isAna)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+              child: SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: () => _analyze(ayet.number, ayet.audioAsset),
+                  icon: const Icon(Icons.analytics, size: 16),
+                  label: const Text('Analiz Et'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF4ade80),
+                    foregroundColor: Colors.black,
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+
+          // YÜKLENİYOR
+          if (isAna)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor: AlwaysStoppedAnimation(Color(0xFF60a5fa)),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Text('Analiz ediliyor...', style: TextStyle(color: Colors.white38, fontSize: 13)),
+                ],
+              ),
+            ),
+
+          // SONUÇ
+          if (result != null)
+            _buildResultRow(result, ayet.number),
+
+          // HATA
+          if (error != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+              child: Text(
+                error,
+                style: const TextStyle(color: Color(0xFFef4444), fontSize: 12),
+              ),
+            ),
         ],
       ),
     );
+  }
+
+  Widget _circleButton({
+    required IconData icon,
+    required Color color,
+    required Color iconColor,
+    VoidCallback? onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 36,
+        height: 36,
+        decoration: BoxDecoration(shape: BoxShape.circle, color: color),
+        child: Icon(icon, color: iconColor, size: 18),
+      ),
+    );
+  }
+
+  Widget _buildResultRow(TecvidAnalysisResult result, int ayetNo) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: const Color(0xFF0d1b2e),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
+          children: [
+            // Toplam skor
+            Container(
+              width: 52,
+              height: 52,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: _scoreColor(result.totalScore).withOpacity(0.15),
+                border: Border.all(color: _scoreColor(result.totalScore), width: 2),
+              ),
+              child: Center(
+                child: Text(
+                  '${result.totalScore}%',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                    color: _scoreColor(result.totalScore),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            // Detaylar
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _scoreChip('Telaffuz', result.telaffuzScore),
+                  const SizedBox(height: 4),
+                  _scoreChip('Med', result.medScore),
+                  const SizedBox(height: 4),
+                  _scoreChip('Harf', result.harfScore),
+                ],
+              ),
+            ),
+            // Yeniden dene
+            GestureDetector(
+              onTap: () => setState(() {
+                _results[ayetNo] = null;
+                _recordingPaths[ayetNo] = null;
+              }),
+              child: const Icon(Icons.refresh, color: Colors.white38, size: 20),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _scoreChip(String label, String level) {
+    final isGood = level == 'iyi' || level == 'mükemmel';
+    return Row(
+      children: [
+        Text(
+          '$label: ',
+          style: const TextStyle(color: Colors.white38, fontSize: 11),
+        ),
+        Text(
+          level,
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.bold,
+            color: isGood ? const Color(0xFF4ade80) : const Color(0xFFfbbf24),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Color _scoreColor(int score) {
+    if (score >= 85) return const Color(0xFF4ade80);
+    if (score >= 70) return const Color(0xFF60a5fa);
+    return const Color(0xFFfbbf24);
   }
 }
