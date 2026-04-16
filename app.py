@@ -155,7 +155,8 @@ def analyze(user_path, ref_path, ayet_no: int = None):
     ratio = u_dur/r_dur if r_dur > 0 else 1.0
 
     # Süre ceza çarpanı — kısa okuma tüm skorları etkiler
-    dur_penalty = min(1.0, ratio / 0.80)  # 0.80 altında lineer ceza
+    # 0.75 altında ceza başlar (daha önce 0.80 idi)
+    dur_penalty = min(1.0, ratio / 0.75)
 
     # --- SÜRE / MED ---
     dur_score = dur_to_score(ratio)
@@ -170,7 +171,7 @@ def analyze(user_path, ref_path, ayet_no: int = None):
     rm = extract_mfcc(ry, sr)
     std = np.std(np.vstack([um, rm]), axis=0) + 1e-8
     mfcc_d = dtw_distance(um/std, rm/std)
-    harf_score_raw = max(0, min(100, 100 - mfcc_d*22))
+    harf_score_raw = max(0, min(100, 100 - mfcc_d*18))  # 22→18, hoparlör kaybına tolerans
     harf_score = harf_score_raw * dur_penalty  # kısa okuyunca harf skoru da düşer
 
     # --- PITCH / TELAFFUZ (süre cezası uygulanır) ---
@@ -181,7 +182,7 @@ def analyze(user_path, ref_path, ayet_no: int = None):
         up_n = (up-np.mean(up))/(np.std(up)+1e-8)
         rp_n = (rp-np.mean(rp))/(np.std(rp)+1e-8)
         pitch_d = dtw_distance(up_n, rp_n)
-        tel_score_raw = max(0, min(100, 100 - pitch_d*80))
+        tel_score_raw = max(0, min(100, 100 - pitch_d*60))  # 80→60, hoparlör kaybına tolerans
     else:
         tel_score_raw = 50.0
     tel_score = tel_score_raw * dur_penalty
