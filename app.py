@@ -1,6 +1,6 @@
 """
-Tecvid Analiz Servisi - Python Backend
-soundfile + numpy ile akustik analiz (librosa bağımlılığı yok)
+Tecvid Analiz Servisi
+DTW + spektral analiz ile gerçekçi tecvid değerlendirmesi
 """
 
 from flask import Flask, request, jsonify
@@ -14,258 +14,272 @@ app = Flask(__name__)
 CORS(app)
 
 # ============================================================================
-# SES ÖZELLİKLERİ ÇIKARICI
+# SES YÜKLEME
 # ============================================================================
 
-class AudioAnalyzer:
-    def __init__(self, audio_path: str):
-        self.y, self.sr = sf.read(audio_path, always_2d=False)
-        # Stereo ise mono'ya çevir
-        if self.y.ndim > 1:
-            self.y = np.mean(self.y, axis=1)
-        self.y = self.y.astype(np.float32)
-        self.duration_ms = int(len(self.y) / self.sr * 1000)
+def load_audio(path: str, target_sr: int = 16000):
+    """Ses dosyasını yükle, mono + resample"""
+    y, sr = sf.read(path, always_2d=False)
+    if y.ndim > 1:
+        y = np.mean(y, axis=1)
+    y = y.astype(np.float64)
 
-    def extract_pitch(self):
-        """Basit pitch tahmini (zero-crossing tabanlı)"""
-        frame_size = int(self.sr * 0.025)  # 25ms frame
-        hop = int(self.sr * 0.010)         # 10ms hop
-        pitches = []
+    # Basit resample (integer oran)
+    if sr != target_sr:
+        ratio = target_sr / sr
+        new_len = int(len(y) * ratio)
+        indices = np.linspace(0, len(y) - 1, new_len)
+        y = np.interp(indices, np.arange(len(y)), y)
 
-        for i in range(0, len(self.y) - frame_size, hop):
-            frame = self.y[i:i + frame_size]
-            # Autocorrelation ile pitch
-            corr = np.correlate(frame, frame, mode='full')
-            corr = corr[len(corr)//2:]
-            # Min lag: 50Hz, max lag: 400Hz
-            min_lag = int(self.sr / 400)
-            max_lag = int(self.sr / 50)
-            if max_lag < len(corr):
-                peak = np.argmax(corr[min_lag:max_lag]) + min_lag
-                if corr[peak] > 0.3 * corr[0]:
-                    pitches.append(self.sr / peak)
-
-        if pitches:
-            return {
-                'mean_hz': float(np.mean(pitches)),
-                'std_hz': float(np.std(pitches)),
-                'values': pitches[:20],
-            }
-        return {'mean_hz': 0.0, 'std_hz': 0.0, 'values': []}
-
-    def extract_energy(self):
-        """RMS enerji analizi"""
-        frame_size = int(self.sr * 0.025)
-        hop = int(self.sr * 0.010)
-        energies = []
-
-        for i in range(0, len(self.y) - frame_size, hop):
-            frame = self.y[i:i + frame_size]
-            rms = np.sqrt(np.mean(frame ** 2))
-            energies.append(float(rms))
-
-        if not energies:
-            return {'mean': 0.0, 'max': 0.0, 'min': 0.0, 'values': []}
-
-        max_e = max(energies) or 1.0
-        normalized = [e / max_e for e in energies]
-        return {
-            'mean': float(np.mean(normalized)),
-            'max': float(np.max(normalized)),
-            'min': float(np.min(normalized)),
-            'values': normalized[:20],
-        }
-
-    def extract_zero_crossing_rate(self):
-        """Sıfır geçiş oranı"""
-        frame_size = int(self.sr * 0.025)
-        hop = int(self.sr * 0.010)
-        zcrs = []
-
-        for i in range(0, len(self.y) - frame_size, hop):
-            frame = self.y[i:i + frame_size]
-            zcr = np.sum(np.abs(np.diff(np.sign(frame)))) / (2 * len(frame))
-            zcrs.append(float(zcr))
-
-        return {
-            'mean': float(np.mean(zcrs)) if zcrs else 0.0,
-            'std': float(np.std(zcrs)) if zcrs else 0.0,
-            'values': zcrs[:20],
-        }
-
-    def extract_spectral_centroid(self):
-        """Spektral merkez (FFT tabanlı)"""
-        frame_size = int(self.sr * 0.025)
-        hop = int(self.sr * 0.010)
-        centroids = []
-        freqs = np.fft.rfftfreq(frame_size, d=1.0/self.sr)
-
-        for i in range(0, len(self.y) - frame_size, hop):
-            frame = self.y[i:i + frame_size]
-            magnitude = np.abs(np.fft.rfft(frame))
-            total = np.sum(magnitude)
-            if total > 0:
-                centroid = float(np.sum(freqs * magnitude) / total)
-                centroids.append(centroid)
-
-        return {
-            'mean_hz': float(np.mean(centroids)) if centroids else 0.0,
-            'std_hz': float(np.std(centroids)) if centroids else 0.0,
-            'values': centroids[:20],
-        }
-
-    def extract_mfcc_simple(self, n_mfcc=13):
-        """Basit MFCC benzeri spektral özellikler"""
-        frame_size = int(self.sr * 0.025)
-        hop = int(self.sr * 0.010)
-        all_features = []
-
-        for i in range(0, len(self.y) - frame_size, hop):
-            frame = self.y[i:i + frame_size]
-            magnitude = np.abs(np.fft.rfft(frame))
-            # Log spektrum
-            log_spec = np.log(magnitude + 1e-10)
-            # DCT benzeri özellikler
-            features = log_spec[:n_mfcc]
-            all_features.append(features)
-
-        if all_features:
-            mean_features = np.mean(all_features, axis=0)
-            return {'mean_coefficients': mean_features.tolist()}
-        return {'mean_coefficients': [0.0] * n_mfcc}
-
-    def extract_formants(self):
-        """Basit formant tahmini"""
-        frame_size = int(self.sr * 0.025)
-        mid = len(self.y) // 2
-        frame = self.y[mid:mid + frame_size]
-        magnitude = np.abs(np.fft.rfft(frame))
-        freqs = np.fft.rfftfreq(frame_size, d=1.0/self.sr)
-
-        # Yerel maksimumları bul
-        peaks = []
-        for j in range(1, len(magnitude) - 1):
-            if magnitude[j] > magnitude[j-1] and magnitude[j] > magnitude[j+1]:
-                if freqs[j] > 100:
-                    peaks.append((magnitude[j], freqs[j]))
-
-        peaks.sort(reverse=True)
-        f1 = int(peaks[0][1]) if len(peaks) > 0 else 0
-        f2 = int(peaks[1][1]) if len(peaks) > 1 else 0
-        f3 = int(peaks[2][1]) if len(peaks) > 2 else 0
-
-        return {'f1_hz': f1, 'f2_hz': f2, 'f3_hz': f3, 'confidence': 0.7}
-
-    def extract_all_features(self):
-        return {
-            'duration_ms': self.duration_ms,
-            'pitch': self.extract_pitch(),
-            'energy': self.extract_energy(),
-            'mfcc': self.extract_mfcc_simple(),
-            'formants': self.extract_formants(),
-            'zero_crossing_rate': self.extract_zero_crossing_rate(),
-            'spectral_centroid': self.extract_spectral_centroid(),
-        }
+    return y, target_sr
 
 # ============================================================================
-# TECVID KARŞILAŞTIRMA MOTORU
+# SPEKTRAL ÖZELLİK ÇIKARIMI
 # ============================================================================
 
-class TecvidComparator:
-    @staticmethod
-    def _get_level(score: float) -> str:
-        if score >= 85:
-            return 'mükemmel'
-        elif score >= 70:
-            return 'iyi'
-        return 'geliştirilmeli'
+def compute_frames(y, sr, frame_ms=25, hop_ms=10):
+    frame_size = int(sr * frame_ms / 1000)
+    hop_size = int(sr * hop_ms / 1000)
+    frames = []
+    for i in range(0, len(y) - frame_size, hop_size):
+        frames.append(y[i:i + frame_size])
+    return np.array(frames), frame_size, hop_size
 
-    @staticmethod
-    def calculate_telaffuz_score(user: dict, ref: dict) -> dict:
-        score = 100.0
-        pitch_error = 0.0
+def mel_filterbank(sr, n_fft, n_mels=26, fmin=80, fmax=7600):
+    """Mel filtre bankası"""
+    def hz_to_mel(hz): return 2595 * np.log10(1 + hz / 700)
+    def mel_to_hz(mel): return 700 * (10 ** (mel / 2595) - 1)
 
-        u_pitch = user['pitch']['mean_hz']
-        r_pitch = ref['pitch']['mean_hz']
-        if u_pitch > 0 and r_pitch > 0:
-            pitch_error = abs(u_pitch - r_pitch) / r_pitch
-            score -= pitch_error * 20
+    mel_min = hz_to_mel(fmin)
+    mel_max = hz_to_mel(fmax)
+    mel_points = np.linspace(mel_min, mel_max, n_mels + 2)
+    hz_points = mel_to_hz(mel_points)
+    bin_points = np.floor((n_fft + 1) * hz_points / sr).astype(int)
 
-        u_energy = user['energy']['mean']
-        r_energy = ref['energy']['mean']
-        if u_energy > 0 and r_energy > 0:
-            energy_error = abs(u_energy - r_energy) / r_energy
-            score -= energy_error * 15
+    filterbank = np.zeros((n_mels, n_fft // 2 + 1))
+    for m in range(1, n_mels + 1):
+        f_m_minus = bin_points[m - 1]
+        f_m = bin_points[m]
+        f_m_plus = bin_points[m + 1]
+        for k in range(f_m_minus, f_m):
+            if f_m != f_m_minus:
+                filterbank[m - 1, k] = (k - f_m_minus) / (f_m - f_m_minus)
+        for k in range(f_m, f_m_plus):
+            if f_m_plus != f_m:
+                filterbank[m - 1, k] = (f_m_plus - k) / (f_m_plus - f_m)
+    return filterbank
 
-        score = max(0, min(100, score))
-        return {
-            'score': int(score),
-            'level': TecvidComparator._get_level(score),
-            'pitch_accuracy': int(max(0, 100 - pitch_error * 100)),
-            'clarity': int(u_energy * 100),
-        }
+def extract_mfcc(y, sr, n_mfcc=13, n_mels=26):
+    """MFCC çıkar — her frame için"""
+    frames, frame_size, _ = compute_frames(y, sr)
+    if len(frames) == 0:
+        return np.zeros((1, n_mfcc))
 
-    @staticmethod
-    def calculate_med_score(user: dict, ref: dict) -> dict:
-        score = 100.0
-        duration_ratio = 1.0
+    window = np.hanning(frame_size)
+    fb = mel_filterbank(sr, frame_size, n_mels)
+    mfccs = []
 
-        r_dur = ref['duration_ms']
-        if r_dur > 0:
-            duration_ratio = user['duration_ms'] / r_dur
-            if duration_ratio < 1.3 or duration_ratio > 2.8:
-                score -= 25
-            elif duration_ratio < 1.5 or duration_ratio > 2.5:
-                score -= 10
+    for frame in frames:
+        if len(frame) < frame_size:
+            continue
+        windowed = frame * window
+        spectrum = np.abs(np.fft.rfft(windowed)) ** 2
+        mel_energy = np.dot(fb, spectrum)
+        log_mel = np.log(mel_energy + 1e-10)
+        # DCT
+        n = len(log_mel)
+        dct = np.array([
+            np.sum(log_mel * np.cos(np.pi * k * (np.arange(n) + 0.5) / n))
+            for k in range(n_mfcc)
+        ])
+        mfccs.append(dct)
 
-        u_f1 = user['formants']['f1_hz']
-        r_f1 = ref['formants']['f1_hz']
-        if u_f1 > 0 and r_f1 > 0:
-            f1_error = abs(u_f1 - r_f1) / r_f1
-            score -= f1_error * 10
+    return np.array(mfccs)  # shape: (n_frames, n_mfcc)
 
-        score = max(0, min(100, score))
-        return {
-            'score': int(score),
-            'level': TecvidComparator._get_level(score),
-            'duration_ratio': round(duration_ratio, 2),
-            'vocal_quality': int(score * 0.6),
-        }
+def extract_pitch_sequence(y, sr):
+    """Autocorrelation ile frame bazlı pitch"""
+    frames, frame_size, _ = compute_frames(y, sr)
+    pitches = []
+    min_lag = int(sr / 400)  # 400 Hz max
+    max_lag = int(sr / 60)   # 60 Hz min
 
-    @staticmethod
-    def calculate_harf_score(user: dict, ref: dict) -> dict:
-        score = 100.0
-        centroid_error = 0.0
+    for frame in frames:
+        if len(frame) < frame_size:
+            pitches.append(0.0)
+            continue
+        corr = np.correlate(frame, frame, mode='full')
+        corr = corr[len(corr) // 2:]
+        if max_lag >= len(corr):
+            pitches.append(0.0)
+            continue
+        segment = corr[min_lag:max_lag]
+        peak_idx = np.argmax(segment)
+        peak_val = segment[peak_idx]
+        if corr[0] > 0 and peak_val / corr[0] > 0.25:
+            pitches.append(sr / (peak_idx + min_lag))
+        else:
+            pitches.append(0.0)
 
-        r_zcr = ref['zero_crossing_rate']['mean']
-        if r_zcr > 0:
-            zcr_error = abs(user['zero_crossing_rate']['mean'] - r_zcr) / r_zcr
-            score -= zcr_error * 25
+    return np.array(pitches)
 
-        r_cent = ref['spectral_centroid']['mean_hz']
-        if r_cent > 0:
-            centroid_error = abs(user['spectral_centroid']['mean_hz'] - r_cent) / r_cent
-            score -= centroid_error * 20
-
-        u_mfcc = np.array(user['mfcc']['mean_coefficients'])
-        r_mfcc = np.array(ref['mfcc']['mean_coefficients'])
-        mfcc_dist = float(np.linalg.norm(u_mfcc - r_mfcc))
-        score -= min(15, mfcc_dist)
-
-        score = max(0, min(100, score))
-        return {
-            'score': int(score),
-            'level': TecvidComparator._get_level(score),
-            'articulation': int(score * 0.8),
-            'spectral_match': int(max(0, 100 - centroid_error * 100)),
-        }
-
-    @staticmethod
-    def calculate_total_score(telaffuz: dict, med: dict, harf: dict) -> int:
-        return int(telaffuz['score'] * 0.4 + med['score'] * 0.35 + harf['score'] * 0.25)
+def extract_energy_sequence(y, sr):
+    """Frame bazlı RMS enerji"""
+    frames, _, _ = compute_frames(y, sr)
+    return np.array([np.sqrt(np.mean(f ** 2)) for f in frames])
 
 # ============================================================================
-# API ENDPOINTS
+# DTW (Dynamic Time Warping)
+# ============================================================================
+
+def dtw_distance(seq1, seq2):
+    """
+    İki dizi arasında DTW mesafesi hesapla.
+    seq1, seq2: (n_frames,) veya (n_frames, n_features)
+    Normalize edilmiş mesafe döner (0=mükemmel, 1+=kötü)
+    """
+    n, m = len(seq1), len(seq2)
+    if n == 0 or m == 0:
+        return 1.0
+
+    # Boyut uyumu
+    if seq1.ndim == 1:
+        seq1 = seq1.reshape(-1, 1)
+        seq2 = seq2.reshape(-1, 1)
+
+    # Bellek için downsample (max 200 frame)
+    if n > 200:
+        idx = np.linspace(0, n - 1, 200).astype(int)
+        seq1 = seq1[idx]
+        n = 200
+    if m > 200:
+        idx = np.linspace(0, m - 1, 200).astype(int)
+        seq2 = seq2[idx]
+        m = 200
+
+    dtw = np.full((n + 1, m + 1), np.inf)
+    dtw[0, 0] = 0
+
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            cost = np.linalg.norm(seq1[i - 1] - seq2[j - 1])
+            dtw[i, j] = cost + min(dtw[i-1, j], dtw[i, j-1], dtw[i-1, j-1])
+
+    # Normalize: path uzunluğuna böl
+    path_len = n + m
+    return float(dtw[n, m]) / path_len
+
+# ============================================================================
+# SKORLAMA
+# ============================================================================
+
+def score_from_dtw(distance, sensitivity=8.0):
+    """DTW mesafesini 0-100 skora çevir. Sensitivity arttıkça daha sert."""
+    score = 100 * np.exp(-sensitivity * distance)
+    return max(0, min(100, float(score)))
+
+def get_level(score):
+    if score >= 80:
+        return 'mükemmel'
+    elif score >= 60:
+        return 'iyi'
+    return 'geliştirilmeli'
+
+def analyze(user_path, ref_path):
+    user_y, sr = load_audio(user_path)
+    ref_y, _   = load_audio(ref_path)
+
+    user_dur = len(user_y) / sr * 1000  # ms
+    ref_dur  = len(ref_y) / sr * 1000
+
+    # --- MFCC (harf kalitesi + genel benzerlik) ---
+    user_mfcc = extract_mfcc(user_y, sr)  # (frames, 13)
+    ref_mfcc  = extract_mfcc(ref_y, sr)
+    mfcc_dist = dtw_distance(user_mfcc, ref_mfcc)
+    harf_score = score_from_dtw(mfcc_dist, sensitivity=6.0)
+
+    # --- PITCH (telaffuz / makam) ---
+    user_pitch = extract_pitch_sequence(user_y, sr)
+    ref_pitch  = extract_pitch_sequence(ref_y, sr)
+    # Sadece sesli bölgeler (pitch > 0)
+    up = user_pitch[user_pitch > 0]
+    rp = ref_pitch[ref_pitch > 0]
+    if len(up) > 5 and len(rp) > 5:
+        pitch_dist = dtw_distance(up, rp)
+        telaffuz_score = score_from_dtw(pitch_dist, sensitivity=5.0)
+    else:
+        telaffuz_score = 50.0  # pitch tespit edilemedi
+
+    # --- SÜRE (med / uzatma) ---
+    dur_ratio = user_dur / ref_dur if ref_dur > 0 else 1.0
+    # İdeal: 0.75 - 1.35 arası (çok kısa veya çok uzun okuma)
+    if 0.75 <= dur_ratio <= 1.35:
+        dur_score = 100.0
+    elif 0.55 <= dur_ratio <= 1.6:
+        # Kademeli düşüş
+        deviation = min(abs(dur_ratio - 1.0) - 0.35, 0.25)
+        dur_score = 100.0 - (deviation / 0.25) * 40
+    else:
+        # Çok kısa veya çok uzun
+        deviation = abs(dur_ratio - 1.0)
+        dur_score = max(0, 60 - (deviation - 0.6) * 80)
+
+    # Enerji profili benzerliği (med harflerinin uzatılması)
+    user_energy = extract_energy_sequence(user_y, sr)
+    ref_energy  = extract_energy_sequence(ref_y, sr)
+    energy_dist = dtw_distance(user_energy, ref_energy)
+    energy_score = score_from_dtw(energy_dist, sensitivity=4.0)
+
+    med_score = dur_score * 0.6 + energy_score * 0.4
+
+    # --- TOPLAM ---
+    total = int(telaffuz_score * 0.35 + med_score * 0.35 + harf_score * 0.30)
+
+    # --- NOTLAR ---
+    notes = []
+
+    if telaffuz_score < 60:
+        notes.append('💬 Telaffuz: Ses tonu ve ritim referanstan çok farklı')
+    elif telaffuz_score < 80:
+        notes.append('💬 Telaffuz: Pitch biraz daha referansa yaklaştırılabilir')
+    else:
+        notes.append('✅ Telaffuz: Çok iyi!')
+
+    if dur_ratio < 0.75:
+        notes.append(f'📏 Med: Çok kısa okudun (referansın %{int(dur_ratio*100)}\'i kadar)')
+    elif dur_ratio > 1.5:
+        notes.append(f'📏 Med: Çok uzun okudun (referansın %{int(dur_ratio*100)}\'i kadar)')
+    elif med_score < 60:
+        notes.append('📏 Med: Uzatma sürelerine dikkat et')
+    elif med_score < 80:
+        notes.append('📏 Med: Med harfleri biraz daha geliştirilebilir')
+    else:
+        notes.append('✅ Med: Mükemmel!')
+
+    if harf_score < 60:
+        notes.append('🗣️ Harf: Harflerin çıkış noktaları referanstan belirgin farklı')
+    elif harf_score < 80:
+        notes.append('🗣️ Harf: Artikülasyon geliştirilebilir')
+    else:
+        notes.append('✅ Harf: Mükemmel!')
+
+    return {
+        'totalScore': total,
+        'telaffuz': {'score': int(telaffuz_score), 'level': get_level(telaffuz_score)},
+        'med':      {'score': int(med_score),      'level': get_level(med_score)},
+        'harf':     {'score': int(harf_score),     'level': get_level(harf_score)},
+        'notes': notes,
+        'debug': {
+            'user_dur_ms': int(user_dur),
+            'ref_dur_ms':  int(ref_dur),
+            'dur_ratio':   round(dur_ratio, 2),
+            'mfcc_dtw':    round(mfcc_dist, 4),
+            'pitch_dtw':   round(pitch_dist if len(up) > 5 and len(rp) > 5 else -1, 4),
+            'energy_dtw':  round(energy_dist, 4),
+        }
+    }
+
+# ============================================================================
+# API
 # ============================================================================
 
 @app.route('/analyze', methods=['POST'])
@@ -275,48 +289,17 @@ def analyze_audio():
             return jsonify({'error': 'user_audio ve reference_audio gerekli'}), 400
 
         user_file = request.files['user_audio']
-        ref_file = request.files['reference_audio']
+        ref_file  = request.files['reference_audio']
 
-        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as u_tmp:
-            user_file.save(u_tmp.name)
-            user_path = u_tmp.name
-
-        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as r_tmp:
-            ref_file.save(r_tmp.name)
-            ref_path = r_tmp.name
+        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as u:
+            user_file.save(u.name); user_path = u.name
+        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as r:
+            ref_file.save(r.name);  ref_path  = r.name
 
         try:
-            user_features = AudioAnalyzer(user_path).extract_all_features()
-            ref_features = AudioAnalyzer(ref_path).extract_all_features()
-
-            telaffuz = TecvidComparator.calculate_telaffuz_score(user_features, ref_features)
-            med = TecvidComparator.calculate_med_score(user_features, ref_features)
-            harf = TecvidComparator.calculate_harf_score(user_features, ref_features)
-            total = TecvidComparator.calculate_total_score(telaffuz, med, harf)
-
-            notes = []
-            for label, data, icon in [
-                ('Telaffuz', telaffuz, '💬'),
-                ('Med', med, '📏'),
-                ('Harf', harf, '🗣️'),
-            ]:
-                s = data['score']
-                if s < 70:
-                    notes.append(f'{icon} {label}: Daha fazla pratik gerekiyor')
-                elif s < 85:
-                    notes.append(f'{icon} {label}: Biraz daha geliştirilebilir')
-                else:
-                    notes.append(f'✅ {label}: Mükemmel!')
-
-            return jsonify({
-                'success': True,
-                'totalScore': total,
-                'telaffuz': {'score': telaffuz['score'], 'level': telaffuz['level']},
-                'med': {'score': med['score'], 'level': med['level']},
-                'harf': {'score': harf['score'], 'level': harf['level']},
-                'notes': notes,
-            }), 200
-
+            result = analyze(user_path, ref_path)
+            result['success'] = True
+            return jsonify(result), 200
         finally:
             os.unlink(user_path)
             os.unlink(ref_path)
