@@ -10,6 +10,7 @@ class TecvidAnalysisResult {
   final List<String> detailedNotes;
   final String? sttNote;
   final String? transcribed;
+  final List<String> missingWords;
 
   TecvidAnalysisResult({
     required this.totalScore,
@@ -19,5 +20,6 @@ class TecvidAnalysisResult {
     required this.detailedNotes,
     this.sttNote,
     this.transcribed,
+    this.missingWords = const [],
   });
 }

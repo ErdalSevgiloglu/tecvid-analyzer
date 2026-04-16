@@ -207,6 +207,7 @@ class _TecvidAnalyzerScreenState extends State<TecvidAnalyzerScreen> {
                   )
                 : null,
             transcribed: data['transcribed'],
+            missingWords: List<String>.from(data['missingWords'] ?? []),
           );
         });
       } else {
@@ -554,14 +555,46 @@ class _TecvidAnalyzerScreenState extends State<TecvidAnalyzerScreen> {
                         : const Color(0xFFef4444).withOpacity(0.4),
                   ),
                 ),
-                child: Text(
-                  result.sttNote!,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: result.sttNote!.contains('✅')
-                        ? const Color(0xFF4ade80)
-                        : const Color(0xFFef4444),
-                  ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      result.sttNote!,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: result.sttNote!.contains('✅')
+                            ? const Color(0xFF4ade80)
+                            : const Color(0xFFef4444),
+                      ),
+                    ),
+                    // Eksik kelimeler
+                    if (result.missingWords.isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 4,
+                        children: result.missingWords.map((word) => Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFef4444).withOpacity(0.15),
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(
+                              color: const Color(0xFFef4444).withOpacity(0.5),
+                            ),
+                          ),
+                          child: Text(
+                            word,
+                            style: const TextStyle(
+                              fontSize: 14,
+                              color: Color(0xFFef4444),
+                              fontWeight: FontWeight.bold,
+                            ),
+                            textDirection: TextDirection.rtl,
+                          ),
+                        )).toList(),
+                      ),
+                    ],
+                  ],
                 ),
               ),
             ],

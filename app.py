@@ -128,9 +128,23 @@ def text_similarity(a: str, b: str) -> float:
     a = a.strip().replace(' ', '')
     b = b.strip().replace(' ', '')
     if not a or not b: return 0.0
-    # Ortak karakter sayısı / max uzunluk
     from difflib import SequenceMatcher
     return SequenceMatcher(None, a, b).ratio()
+
+def find_missing_words(transcribed: str, expected: str) -> list:
+    """Beklenen metinde olup okunanada olmayan kelimeleri bul"""
+    from difflib import SequenceMatcher
+    t_words = transcribed.strip().split()
+    e_words = expected.strip().split()
+    missing = []
+    for word in e_words:
+        found = any(
+            SequenceMatcher(None, word, tw).ratio() > 0.6
+            for tw in t_words
+        )
+        if not found:
+            missing.append(word)
+    return missing
 
 # ============================================================================
 # SKORLAMA
@@ -192,6 +206,7 @@ def analyze(user_path, ref_path, ayet_no: int = None):
     transcribed = None
     stt_note = None
     stt_error = None
+    missing_words = []
     try:
         if GROQ_API_KEY:
             from groq import Groq
@@ -216,10 +231,12 @@ def analyze(user_path, ref_path, ayet_no: int = None):
                 expected = FATIHA_TEXTS[ayet_no]
                 sim = text_similarity(transcribed, expected)
                 stt_score = sim * 100
+                missing = find_missing_words(transcribed, expected)
+                missing_words = missing
                 if sim < 0.4:
                     stt_note = '🔤 Metin: Okunan kelimeler yanlış veya eksik'
-                elif sim < 0.7:
-                    stt_note = '🔤 Metin: Bazı kelimeler eksik veya yanlış'
+                elif missing:
+                    stt_note = f'🔤 Metin: Eksik okundu'
                 else:
                     stt_note = '✅ Metin: Doğru okundu'
     except Exception as e:
@@ -259,6 +276,7 @@ def analyze(user_path, ref_path, ayet_no: int = None):
         'harf':     {'score': int(harf_score), 'level': get_level(harf_score)},
         'notes': notes,
         'transcribed': transcribed,
+        'missingWords': missing_words,
         'debug': {
             'user_dur_ms': int(u_dur), 'ref_dur_ms': int(r_dur),
             'dur_ratio': round(ratio,2), 'dur_score': round(dur_score,1),
