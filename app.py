@@ -203,11 +203,13 @@ def analyze(user_path, ref_path, ayet_no: int = None):
                     model="whisper-large-v3-turbo",
                     response_format="verbose_json"
                 )
-            detected_lang = getattr(resp_verbose, 'language', 'ar')
+            detected_lang = getattr(resp_verbose, 'language', 'arabic')
             transcribed = getattr(resp_verbose, 'text', '').strip()
 
-            if detected_lang != 'ar':
-                # Arapça değil — yanlış dil
+            # Whisper "arabic" veya "ar" döndürebilir
+            is_arabic = detected_lang.lower() in ('ar', 'arabic')
+
+            if not is_arabic:
                 stt_score = 0.0
                 stt_note = f'🔤 Metin: Arapça okunmadı (tespit edilen dil: {detected_lang})'
             elif ayet_no and ayet_no in FATIHA_TEXTS:
