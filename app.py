@@ -196,20 +196,26 @@ def analyze(user_path, ref_path, ayet_no: int = None):
         if GROQ_API_KEY:
             from groq import Groq
             client = Groq(api_key=GROQ_API_KEY)
+            # Önce dil tespiti için verbose_json al
             with open(user_path, 'rb') as f:
-                resp = client.audio.transcriptions.create(
+                resp_verbose = client.audio.transcriptions.create(
                     file=("audio.wav", f),
                     model="whisper-large-v3-turbo",
-                    language="ar",
-                    response_format="text"
+                    response_format="verbose_json"
                 )
-            transcribed = str(resp).strip()
-            if ayet_no and ayet_no in FATIHA_TEXTS:
+            detected_lang = getattr(resp_verbose, 'language', 'ar')
+            transcribed = getattr(resp_verbose, 'text', '').strip()
+
+            if detected_lang != 'ar':
+                # Arapça değil — yanlış dil
+                stt_score = 0.0
+                stt_note = f'🔤 Metin: Arapça okunmadı (tespit edilen dil: {detected_lang})'
+            elif ayet_no and ayet_no in FATIHA_TEXTS:
                 expected = FATIHA_TEXTS[ayet_no]
                 sim = text_similarity(transcribed, expected)
                 stt_score = sim * 100
                 if sim < 0.4:
-                    stt_note = '🔤 Metin: Okunan kelimeler referanstan çok farklı'
+                    stt_note = '🔤 Metin: Okunan kelimeler yanlış veya eksik'
                 elif sim < 0.7:
                     stt_note = '🔤 Metin: Bazı kelimeler eksik veya yanlış'
                 else:

@@ -197,6 +197,16 @@ class _TecvidAnalyzerScreenState extends State<TecvidAnalyzerScreen> {
             medScore: data['med']['level'],
             harfScore: data['harf']['level'],
             detailedNotes: List<String>.from(data['notes'] ?? []),
+            sttNote: data['notes'] != null
+                ? (data['notes'] as List).cast<String>().firstWhere(
+                    (n) => n.contains('Metin:'),
+                    orElse: () => '',
+                  ).isEmpty ? null : (data['notes'] as List).cast<String>().firstWhere(
+                    (n) => n.contains('Metin:'),
+                    orElse: () => '',
+                  )
+                : null,
+            transcribed: data['transcribed'],
           );
         });
       } else {
@@ -479,50 +489,82 @@ class _TecvidAnalyzerScreenState extends State<TecvidAnalyzerScreen> {
           color: const Color(0xFF0d1b2e),
           borderRadius: BorderRadius.circular(12),
         ),
-        child: Row(
+        child: Column(
           children: [
-            // Toplam skor
-            Container(
-              width: 52,
-              height: 52,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: _scoreColor(result.totalScore).withOpacity(0.15),
-                border: Border.all(color: _scoreColor(result.totalScore), width: 2),
-              ),
-              child: Center(
+            Row(
+              children: [
+                // Toplam skor
+                Container(
+                  width: 52,
+                  height: 52,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: _scoreColor(result.totalScore).withOpacity(0.15),
+                    border: Border.all(color: _scoreColor(result.totalScore), width: 2),
+                  ),
+                  child: Center(
+                    child: Text(
+                      '${result.totalScore}%',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                        color: _scoreColor(result.totalScore),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                // Detaylar
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _scoreChip('Telaffuz', result.telaffuzScore),
+                      const SizedBox(height: 4),
+                      _scoreChip('Med', result.medScore),
+                      const SizedBox(height: 4),
+                      _scoreChip('Harf', result.harfScore),
+                    ],
+                  ),
+                ),
+                // Yeniden dene
+                GestureDetector(
+                  onTap: () => setState(() {
+                    _results[ayetNo] = null;
+                    _recordingPaths[ayetNo] = null;
+                  }),
+                  child: const Icon(Icons.refresh, color: Colors.white38, size: 20),
+                ),
+              ],
+            ),
+            // STT notu
+            if (result.sttNote != null) ...[
+              const SizedBox(height: 8),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                decoration: BoxDecoration(
+                  color: result.sttNote!.contains('✅')
+                      ? const Color(0xFF1e5f3d).withOpacity(0.3)
+                      : const Color(0xFF5f1e1e).withOpacity(0.3),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: result.sttNote!.contains('✅')
+                        ? const Color(0xFF4ade80).withOpacity(0.4)
+                        : const Color(0xFFef4444).withOpacity(0.4),
+                  ),
+                ),
                 child: Text(
-                  '${result.totalScore}%',
+                  result.sttNote!,
                   style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.bold,
-                    color: _scoreColor(result.totalScore),
+                    fontSize: 12,
+                    color: result.sttNote!.contains('✅')
+                        ? const Color(0xFF4ade80)
+                        : const Color(0xFFef4444),
                   ),
                 ),
               ),
-            ),
-            const SizedBox(width: 12),
-            // Detaylar
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _scoreChip('Telaffuz', result.telaffuzScore),
-                  const SizedBox(height: 4),
-                  _scoreChip('Med', result.medScore),
-                  const SizedBox(height: 4),
-                  _scoreChip('Harf', result.harfScore),
-                ],
-              ),
-            ),
-            // Yeniden dene
-            GestureDetector(
-              onTap: () => setState(() {
-                _results[ayetNo] = null;
-                _recordingPaths[ayetNo] = null;
-              }),
-              child: const Icon(Icons.refresh, color: Colors.white38, size: 20),
-            ),
+            ],
           ],
         ),
       ),
