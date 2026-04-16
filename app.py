@@ -290,7 +290,10 @@ def analyze_audio():
 
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({'status': 'ok'}), 200
+    return jsonify({
+        'status': 'ok',
+        'groq_configured': bool(GROQ_API_KEY),
+    }), 200
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5001))
