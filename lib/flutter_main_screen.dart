@@ -189,7 +189,7 @@ class _TecvidAnalyzerScreenState extends State<TecvidAnalyzerScreen> {
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        debugPrint('=== DEBUG: dur_ratio=${data['debug']?['dur_ratio']} mfcc=${data['debug']?['mfcc_dtw']} pitch=${data['debug']?['pitch_dtw']} energy=${data['debug']?['energy_dtw']} user_ms=${data['debug']?['user_dur_ms']} ref_ms=${data['debug']?['ref_dur_ms']}');
+        debugPrint('DEBUG: dur_ratio=${data['debug']?['dur_ratio']} mfcc=${data['debug']?['mfcc_dtw']} stt=${data['debug']?['stt_score']}');
         setState(() {
           _results[ayetNo] = TecvidAnalysisResult(
             totalScore: data['totalScore'],

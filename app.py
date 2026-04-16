@@ -259,7 +259,6 @@ def analyze(user_path, ref_path, ayet_no: int = None):
         'harf':     {'score': int(harf_score), 'level': get_level(harf_score)},
         'notes': notes,
         'transcribed': transcribed,
-        'stt_error': stt_error,
         'debug': {
             'user_dur_ms': int(u_dur), 'ref_dur_ms': int(r_dur),
             'dur_ratio': round(ratio,2), 'dur_score': round(dur_score,1),
