@@ -172,8 +172,8 @@ def dtw_distance(seq1, seq2):
 # SKORLAMA
 # ============================================================================
 
-def score_from_dtw(distance, sensitivity=8.0):
-    """DTW mesafesini 0-100 skora çevir. Sensitivity arttıkça daha sert."""
+def score_from_dtw(distance, sensitivity=3.0):
+    """DTW mesafesini 0-100 skora çevir."""
     score = 100 * np.exp(-sensitivity * distance)
     return max(0, min(100, float(score)))
 
@@ -194,8 +194,18 @@ def analyze(user_path, ref_path):
     # --- MFCC (harf kalitesi + genel benzerlik) ---
     user_mfcc = extract_mfcc(user_y, sr)  # (frames, 13)
     ref_mfcc  = extract_mfcc(ref_y, sr)
-    mfcc_dist = dtw_distance(user_mfcc, ref_mfcc)
-    harf_score = score_from_dtw(mfcc_dist, sensitivity=6.0)
+    # --- MFCC normalize et önce ---
+    if user_mfcc.shape[0] > 0 and ref_mfcc.shape[0] > 0:
+        # Her katsayıyı std ile normalize et
+        combined = np.vstack([user_mfcc, ref_mfcc])
+        std = np.std(combined, axis=0) + 1e-8
+        user_mfcc_n = user_mfcc / std
+        ref_mfcc_n  = ref_mfcc / std
+    else:
+        user_mfcc_n, ref_mfcc_n = user_mfcc, ref_mfcc
+
+    mfcc_dist = dtw_distance(user_mfcc_n, ref_mfcc_n)
+    harf_score = score_from_dtw(mfcc_dist, sensitivity=2.0)
 
     # --- PITCH (telaffuz / makam) ---
     user_pitch = extract_pitch_sequence(user_y, sr)
@@ -204,30 +214,31 @@ def analyze(user_path, ref_path):
     up = user_pitch[user_pitch > 0]
     rp = ref_pitch[ref_pitch > 0]
     if len(up) > 5 and len(rp) > 5:
-        pitch_dist = dtw_distance(up, rp)
-        telaffuz_score = score_from_dtw(pitch_dist, sensitivity=5.0)
+        # Pitch'i normalize et (konuşmacı bağımsız)
+        up_n = (up - np.mean(up)) / (np.std(up) + 1e-8)
+        rp_n = (rp - np.mean(rp)) / (np.std(rp) + 1e-8)
+        pitch_dist = dtw_distance(up_n, rp_n)
+        telaffuz_score = score_from_dtw(pitch_dist, sensitivity=1.5)
     else:
-        telaffuz_score = 50.0  # pitch tespit edilemedi
+        telaffuz_score = 60.0
 
     # --- SÜRE (med / uzatma) ---
     dur_ratio = user_dur / ref_dur if ref_dur > 0 else 1.0
-    # İdeal: 0.75 - 1.35 arası (çok kısa veya çok uzun okuma)
-    if 0.75 <= dur_ratio <= 1.35:
+    # İdeal: 0.65 - 1.45 arası
+    if 0.65 <= dur_ratio <= 1.45:
         dur_score = 100.0
-    elif 0.55 <= dur_ratio <= 1.6:
-        # Kademeli düşüş
-        deviation = min(abs(dur_ratio - 1.0) - 0.35, 0.25)
-        dur_score = 100.0 - (deviation / 0.25) * 40
+    elif 0.45 <= dur_ratio <= 1.7:
+        deviation = max(abs(dur_ratio - 1.0) - 0.45, 0)
+        dur_score = 100.0 - (deviation / 0.25) * 35
     else:
-        # Çok kısa veya çok uzun
         deviation = abs(dur_ratio - 1.0)
-        dur_score = max(0, 60 - (deviation - 0.6) * 80)
+        dur_score = max(0, 65 - (deviation - 0.7) * 80)
 
     # Enerji profili benzerliği (med harflerinin uzatılması)
     user_energy = extract_energy_sequence(user_y, sr)
     ref_energy  = extract_energy_sequence(ref_y, sr)
     energy_dist = dtw_distance(user_energy, ref_energy)
-    energy_score = score_from_dtw(energy_dist, sensitivity=4.0)
+    energy_score = score_from_dtw(energy_dist, sensitivity=2.0)
 
     med_score = dur_score * 0.6 + energy_score * 0.4
 
