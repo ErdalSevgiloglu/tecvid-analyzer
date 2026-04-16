@@ -207,7 +207,12 @@ class _TecvidAnalyzerScreenState extends State<TecvidAnalyzerScreen> {
                   )
                 : null,
             transcribed: data['transcribed'],
-            missingWords: List<String>.from(data['missingWords'] ?? []),
+            missingWords: (data['missingWords'] as List? ?? [])
+                .map((w) => MissingWord(
+                      arabic: w['arabic'] ?? '',
+                      pronunciation: w['pronunciation'] ?? '',
+                    ))
+                .toList(),
           );
         });
       } else {
@@ -572,24 +577,29 @@ class _TecvidAnalyzerScreenState extends State<TecvidAnalyzerScreen> {
                       const SizedBox(height: 6),
                       Wrap(
                         spacing: 6,
-                        runSpacing: 4,
-                        children: result.missingWords.map((word) => Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                        runSpacing: 6,
+                        children: result.missingWords.map((w) => Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                           decoration: BoxDecoration(
-                            color: const Color(0xFFef4444).withOpacity(0.15),
-                            borderRadius: BorderRadius.circular(6),
+                            color: const Color(0xFFef4444).withOpacity(0.12),
+                            borderRadius: BorderRadius.circular(8),
                             border: Border.all(
                               color: const Color(0xFFef4444).withOpacity(0.5),
                             ),
                           ),
-                          child: Text(
-                            word,
-                            style: const TextStyle(
-                              fontSize: 14,
-                              color: Color(0xFFef4444),
-                              fontWeight: FontWeight.bold,
-                            ),
-                            textDirection: TextDirection.rtl,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              // Latin okunuş
+                              Text(
+                                w.pronunciation.isNotEmpty ? w.pronunciation : '—',
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  color: Color(0xFFef4444),
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
                           ),
                         )).toList(),
                       ),

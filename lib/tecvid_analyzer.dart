@@ -2,6 +2,12 @@
 // TECVID ANALİZ SONUÇ MODELİ
 // ============================================================================
 
+class MissingWord {
+  final String arabic;
+  final String pronunciation;
+  const MissingWord({required this.arabic, required this.pronunciation});
+}
+
 class TecvidAnalysisResult {
   final int totalScore;
   final String telaffuzScore;
@@ -10,7 +16,7 @@ class TecvidAnalysisResult {
   final List<String> detailedNotes;
   final String? sttNote;
   final String? transcribed;
-  final List<String> missingWords;
+  final List<MissingWord> missingWords;
 
   TecvidAnalysisResult({
     required this.totalScore,

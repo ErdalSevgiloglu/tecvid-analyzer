@@ -30,6 +30,36 @@ FATIHA_TEXTS = {
     7: "صراط الذين أنعمت عليهم غير المغضوب عليهم ولا الضالين",
 }
 
+# Her Arapça kelimenin Latin okunuşu
+WORD_PRONUNCIATIONS = {
+    "بسم":       "bismi",
+    "الله":      "allah",
+    "الرحمن":    "errahmân",
+    "الرحيم":    "errahîm",
+    "الحمد":     "elhamdü",
+    "لله":       "lillâh",
+    "رب":        "rabbi",
+    "العالمين":  "el-âlemîn",
+    "مالك":      "mâliki",
+    "يوم":       "yevmi",
+    "الدين":     "ed-dîn",
+    "إياك":      "iyyâke",
+    "نعبد":      "na'büdü",
+    "وإياك":     "ve iyyâke",
+    "نستعين":    "nesta'în",
+    "اهدنا":     "ihdinâ",
+    "الصراط":    "es-sırâta",
+    "المستقيم":  "el-müstakîm",
+    "صراط":      "sırâta",
+    "الذين":     "ellezîne",
+    "أنعمت":     "en'amte",
+    "عليهم":     "aleyhim",
+    "غير":       "ğayri",
+    "المغضوب":   "el-mağdûbi",
+    "ولا":       "ve lâ",
+    "الضالين":   "ed-dâllîn",
+}
+
 # ============================================================================
 # SES YÜKLEME
 # ============================================================================
@@ -132,7 +162,7 @@ def text_similarity(a: str, b: str) -> float:
     return SequenceMatcher(None, a, b).ratio()
 
 def find_missing_words(transcribed: str, expected: str) -> list:
-    """Beklenen metinde olup okunanada olmayan kelimeleri bul"""
+    """Eksik kelimeleri Arapça + Latin okunuşuyla döndür"""
     from difflib import SequenceMatcher
     t_words = transcribed.strip().split()
     e_words = expected.strip().split()
@@ -143,7 +173,11 @@ def find_missing_words(transcribed: str, expected: str) -> list:
             for tw in t_words
         )
         if not found:
-            missing.append(word)
+            pronunciation = WORD_PRONUNCIATIONS.get(word, '')
+            missing.append({
+                'arabic': word,
+                'pronunciation': pronunciation,
+            })
     return missing
 
 # ============================================================================
