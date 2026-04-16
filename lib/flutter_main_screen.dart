@@ -79,7 +79,7 @@ class TecvidAnalyzerScreen extends StatefulWidget {
 }
 
 class _TecvidAnalyzerScreenState extends State<TecvidAnalyzerScreen> {
-  static const String BACKEND_URL = 'https://tecvid-backend.onrender.com';
+  static const String BACKEND_URL = 'https://tecvid-analyzer.onrender.com';
 
   // Her ayet için kayıt durumu
   final Map<int, bool> _isRecording = {};
