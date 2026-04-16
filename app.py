@@ -1,6 +1,6 @@
 """
 Tecvid Analiz Servisi
-DTW + spektral analiz ile gerçekçi tecvid değerlendirmesi
+DTW + Whisper STT ile gerçekçi tecvid değerlendirmesi
 """
 
 from flask import Flask, request, jsonify
@@ -12,6 +12,29 @@ import tempfile
 
 app = Flask(__name__)
 CORS(app)
+
+# Whisper lazy load (ilk istekte yükle)
+_whisper_model = None
+def get_whisper():
+    global _whisper_model
+    if _whisper_model is None:
+        import whisper
+        _whisper_model = whisper.load_model("tiny")
+    return _whisper_model
+
+# ============================================================================
+# FATIHA AYETLERİ (beklenen metin)
+# ============================================================================
+
+FATIHA_TEXTS = {
+    1: "بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ",
+    2: "الْحَمْدُ لِلَّهِ رَبِّ الْعَالَمِينَ",
+    3: "الرَّحْمَٰنِ الرَّحِيمِ",
+    4: "مَالِكِ يَوْمِ الدِّينِ",
+    5: "إِيَّاكَ نَعْبُدُ وَإِيَّاكَ نَسْتَعِينُ",
+    6: "اهْدِنَا الصِّرَاطَ الْمُسْتَقِيمَ",
+    7: "صِرَاطَ الَّذِينَ أَنْعَمْتَ عَلَيْهِمْ غَيْرِ الْمَغْضُوبِ عَلَيْهِمْ وَلَا الضَّالِّينَ",
+}
 
 # ============================================================================
 # SES YÜKLEME
@@ -90,20 +113,30 @@ def extract_energy(y, sr):
 def dtw_distance(a, b):
     if a.ndim == 1: a = a.reshape(-1,1)
     if b.ndim == 1: b = b.reshape(-1,1)
-    # Downsample to max 150 frames for speed
     def ds(x):
         if len(x) > 150:
-            idx = np.linspace(0, len(x)-1, 150).astype(int)
-            return x[idx]
+            return x[np.linspace(0, len(x)-1, 150).astype(int)]
         return x
     a, b = ds(a), ds(b)
     n, m = len(a), len(b)
     D = np.full((n+1, m+1), np.inf); D[0,0] = 0
     for i in range(1, n+1):
         for j in range(1, m+1):
-            cost = np.linalg.norm(a[i-1] - b[j-1])
-            D[i,j] = cost + min(D[i-1,j], D[i,j-1], D[i-1,j-1])
+            D[i,j] = np.linalg.norm(a[i-1]-b[j-1]) + min(D[i-1,j], D[i,j-1], D[i-1,j-1])
     return float(D[n,m]) / (n+m)
+
+# ============================================================================
+# METİN BENZERLİĞİ (karakter bazlı)
+# ============================================================================
+
+def text_similarity(a: str, b: str) -> float:
+    """Basit karakter örtüşme oranı (0-1)"""
+    a = a.strip().replace(' ', '')
+    b = b.strip().replace(' ', '')
+    if not a or not b: return 0.0
+    # Ortak karakter sayısı / max uzunluk
+    from difflib import SequenceMatcher
+    return SequenceMatcher(None, a, b).ratio()
 
 # ============================================================================
 # SKORLAMA
@@ -112,7 +145,14 @@ def dtw_distance(a, b):
 def get_level(s):
     return 'mükemmel' if s >= 80 else ('iyi' if s >= 60 else 'geliştirilmeli')
 
-def analyze(user_path, ref_path):
+def dur_to_score(ratio):
+    """Süre oranını skora çevir — sert eğri"""
+    if   ratio >= 0.80: return 100.0
+    elif ratio >= 0.65: return 70 + (ratio-0.65)/0.15*30
+    elif ratio >= 0.45: return 30 + (ratio-0.45)/0.20*40
+    else:               return max(0, ratio * 67)
+
+def analyze(user_path, ref_path, ayet_no: int = None):
     uy, sr = load_audio(user_path)
     ry, _  = load_audio(ref_path)
 
@@ -120,21 +160,26 @@ def analyze(user_path, ref_path):
     r_dur = len(ry)/sr*1000
     ratio = u_dur/r_dur if r_dur > 0 else 1.0
 
-    # --- SÜRE SKORU (med için %80 belirleyici) ---
-    if   ratio >= 0.80:              dur_score = 100.0
-    elif ratio >= 0.65:              dur_score = 70 + (ratio-0.65)/0.15*30
-    elif ratio >= 0.45:              dur_score = 30 + (ratio-0.45)/0.20*40
-    else:                            dur_score = max(0, ratio*67)
+    # Süre ceza çarpanı — kısa okuma tüm skorları etkiler
+    dur_penalty = min(1.0, ratio / 0.80)  # 0.80 altında lineer ceza
 
-    # --- MFCC / HARF ---
+    # --- SÜRE / MED ---
+    dur_score = dur_to_score(ratio)
+    ue = extract_energy(uy, sr)
+    re = extract_energy(ry, sr)
+    en_d = dtw_distance(ue, re)
+    en_score = max(0, min(100, 100 - en_d*300))
+    med_score = dur_score*0.85 + en_score*0.15
+
+    # --- MFCC / HARF (süre cezası uygulanır) ---
     um = extract_mfcc(uy, sr)
     rm = extract_mfcc(ry, sr)
     std = np.std(np.vstack([um, rm]), axis=0) + 1e-8
     mfcc_d = dtw_distance(um/std, rm/std)
-    # mfcc_d: 0=mükemmel, ~1=iyi, ~2.7=kötü → lineer skor
-    harf_score = max(0, min(100, 100 - mfcc_d*22))
+    harf_score_raw = max(0, min(100, 100 - mfcc_d*22))
+    harf_score = harf_score_raw * dur_penalty  # kısa okuyunca harf skoru da düşer
 
-    # --- PITCH / TELAFFUZ ---
+    # --- PITCH / TELAFFUZ (süre cezası uygulanır) ---
     up = extract_pitch(uy, sr); rp = extract_pitch(ry, sr)
     up = up[up>0]; rp = rp[rp>0]
     pitch_d = -1.0
@@ -142,21 +187,38 @@ def analyze(user_path, ref_path):
         up_n = (up-np.mean(up))/(np.std(up)+1e-8)
         rp_n = (rp-np.mean(rp))/(np.std(rp)+1e-8)
         pitch_d = dtw_distance(up_n, rp_n)
-        # pitch_d: 0=mükemmel, 0.3=orta, 0.6+=kötü
-        tel_score = max(0, min(100, 100 - pitch_d*80))
+        tel_score_raw = max(0, min(100, 100 - pitch_d*80))
     else:
-        tel_score = 50.0
+        tel_score_raw = 50.0
+    tel_score = tel_score_raw * dur_penalty
 
-    # --- ENERJİ (med yardımcı) ---
-    ue = extract_energy(uy, sr)
-    re = extract_energy(ry, sr)
-    en_d = dtw_distance(ue, re)
-    en_score = max(0, min(100, 100 - en_d*300))
-
-    med_score = dur_score*0.80 + en_score*0.20
+    # --- STT / DİKTE (varsa) ---
+    stt_score = None
+    transcribed = None
+    stt_note = None
+    try:
+        model = get_whisper()
+        result = model.transcribe(user_path, language="ar", fp16=False)
+        transcribed = result.get("text", "").strip()
+        if ayet_no and ayet_no in FATIHA_TEXTS:
+            expected = FATIHA_TEXTS[ayet_no]
+            sim = text_similarity(transcribed, expected)
+            stt_score = sim * 100
+            if sim < 0.4:
+                stt_note = f'🔤 Metin: Okunan kelimeler referanstan çok farklı'
+            elif sim < 0.7:
+                stt_note = f'🔤 Metin: Bazı kelimeler eksik veya yanlış'
+            else:
+                stt_note = f'✅ Metin: Doğru okundu'
+    except Exception as e:
+        stt_note = None
 
     # --- TOPLAM ---
-    total = int(tel_score*0.20 + med_score*0.50 + harf_score*0.30)
+    if stt_score is not None:
+        # STT varsa: telaffuz=%15, med=%40, harf=%25, stt=%20
+        total = int(tel_score*0.15 + med_score*0.40 + harf_score*0.25 + stt_score*0.20)
+    else:
+        total = int(tel_score*0.20 + med_score*0.50 + harf_score*0.30)
 
     # --- NOTLAR ---
     notes = []
@@ -174,18 +236,24 @@ def analyze(user_path, ref_path):
     elif harf_score < 70: notes.append('🗣️ Harf: Artikülasyon geliştirilebilir')
     else:                 notes.append('✅ Harf: Mükemmel!')
 
+    if stt_note:
+        notes.append(stt_note)
+
     return {
         'totalScore': total,
-        'telaffuz': {'score': int(tel_score),   'level': get_level(tel_score)},
-        'med':      {'score': int(med_score),   'level': get_level(med_score)},
-        'harf':     {'score': int(harf_score),  'level': get_level(harf_score)},
+        'telaffuz': {'score': int(tel_score),  'level': get_level(tel_score)},
+        'med':      {'score': int(med_score),  'level': get_level(med_score)},
+        'harf':     {'score': int(harf_score), 'level': get_level(harf_score)},
         'notes': notes,
+        'transcribed': transcribed,
         'debug': {
             'user_dur_ms': int(u_dur), 'ref_dur_ms': int(r_dur),
             'dur_ratio': round(ratio,2), 'dur_score': round(dur_score,1),
+            'dur_penalty': round(dur_penalty,2),
             'mfcc_dtw': round(mfcc_d,4), 'harf_score': round(harf_score,1),
-            'pitch_dtw': round(pitch_d,4), 'telaffuz_score': round(tel_score,1),
+            'pitch_dtw': round(pitch_d,4), 'tel_score': round(tel_score,1),
             'energy_dtw': round(float(en_d),4), 'med_score': round(med_score,1),
+            'stt_score': round(stt_score,1) if stt_score is not None else None,
         }
     }
 
@@ -199,13 +267,15 @@ def analyze_audio():
         if 'user_audio' not in request.files or 'reference_audio' not in request.files:
             return jsonify({'error': 'user_audio ve reference_audio gerekli'}), 400
 
+        ayet_no = request.form.get('ayet_no', type=int)
+
         with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as u:
             request.files['user_audio'].save(u.name); up = u.name
         with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as r:
             request.files['reference_audio'].save(r.name); rp = r.name
 
         try:
-            result = analyze(up, rp)
+            result = analyze(up, rp, ayet_no)
             result['success'] = True
             return jsonify(result), 200
         finally:
