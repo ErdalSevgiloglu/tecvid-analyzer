@@ -13,14 +13,8 @@ import tempfile
 app = Flask(__name__)
 CORS(app)
 
-# Whisper lazy load (ilk istekte yükle)
-_whisper_model = None
-def get_whisper():
-    global _whisper_model
-    if _whisper_model is None:
-        from faster_whisper import WhisperModel
-        _whisper_model = WhisperModel("tiny", device="cpu", compute_type="int8")
-    return _whisper_model
+# Groq Whisper API (ücretsiz, sistem bağımlılığı yok)
+GROQ_API_KEY = os.environ.get('GROQ_API_KEY', '')
 
 # ============================================================================
 # FATIHA AYETLERİ (beklenen metin)
@@ -192,26 +186,34 @@ def analyze(user_path, ref_path, ayet_no: int = None):
         tel_score_raw = 50.0
     tel_score = tel_score_raw * dur_penalty
 
-    # --- STT / DİKTE (varsa) ---
+    # --- STT / DİKTE (Groq Whisper API) ---
     stt_score = None
     transcribed = None
     stt_note = None
     try:
-        model = get_whisper()
-        segments, _ = model.transcribe(user_path, language="ar")
-        transcribed = " ".join([s.text for s in segments]).strip()
-        if ayet_no and ayet_no in FATIHA_TEXTS:
-            expected = FATIHA_TEXTS[ayet_no]
-            sim = text_similarity(transcribed, expected)
-            stt_score = sim * 100
-            if sim < 0.4:
-                stt_note = f'🔤 Metin: Okunan kelimeler referanstan çok farklı'
-            elif sim < 0.7:
-                stt_note = f'🔤 Metin: Bazı kelimeler eksik veya yanlış'
-            else:
-                stt_note = f'✅ Metin: Doğru okundu'
-    except Exception as e:
-        stt_note = None
+        if GROQ_API_KEY:
+            from groq import Groq
+            client = Groq(api_key=GROQ_API_KEY)
+            with open(user_path, 'rb') as f:
+                resp = client.audio.transcriptions.create(
+                    file=("audio.wav", f),
+                    model="whisper-large-v3-turbo",
+                    language="ar",
+                    response_format="text"
+                )
+            transcribed = str(resp).strip()
+            if ayet_no and ayet_no in FATIHA_TEXTS:
+                expected = FATIHA_TEXTS[ayet_no]
+                sim = text_similarity(transcribed, expected)
+                stt_score = sim * 100
+                if sim < 0.4:
+                    stt_note = '🔤 Metin: Okunan kelimeler referanstan çok farklı'
+                elif sim < 0.7:
+                    stt_note = '🔤 Metin: Bazı kelimeler eksik veya yanlış'
+                else:
+                    stt_note = '✅ Metin: Doğru okundu'
+    except Exception:
+        pass
 
     # --- TOPLAM ---
     if stt_score is not None:
