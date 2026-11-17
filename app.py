@@ -153,30 +153,48 @@ def dtw_distance(a, b):
 # METİN BENZERLİĞİ (karakter bazlı)
 # ============================================================================
 
+import re as _re
+
+# Hareke, Kur'an işaretleri (durak, sekte, ۞ vb.), tatvil ve üstün elif
+_AR_MARKS = _re.compile('[ؐ-ًؚ-ٰٟۖ-ۭـ]')
+
+
+def normalize_ar(text: str) -> str:
+    """Karşılaştırma için Arapça metni sadeleştir (harekesiz, tek tip elif/ye/te)"""
+    t = _AR_MARKS.sub('', text or '')
+    t = _re.sub('[أإآٱ]', 'ا', t)
+    t = t.replace('ى', 'ي').replace('ة', 'ه')
+    return ' '.join(t.split())
+
+
+_PRON = {normalize_ar(k): v for k, v in WORD_PRONUNCIATIONS.items()}
+
+
 def text_similarity(a: str, b: str) -> float:
-    """Basit karakter örtüşme oranı (0-1)"""
-    a = a.strip().replace(' ', '')
-    b = b.strip().replace(' ', '')
+    """Harekesiz karakter örtüşme oranı (0-1)"""
+    a = normalize_ar(a).replace(' ', '')
+    b = normalize_ar(b).replace(' ', '')
     if not a or not b: return 0.0
     from difflib import SequenceMatcher
     return SequenceMatcher(None, a, b).ratio()
 
 def find_missing_words(transcribed: str, expected: str) -> list:
-    """Eksik kelimeleri Arapça + Latin okunuşuyla döndür"""
+    """Eksik kelimeleri Arapça (beklenen yazımıyla) + Latin okunuşuyla döndür"""
     from difflib import SequenceMatcher
-    t_words = transcribed.strip().split()
-    e_words = expected.strip().split()
+    t_words = normalize_ar(transcribed).split()
     missing = []
-    for word in e_words:
+    for word in (expected or '').split():
+        norm = normalize_ar(word)
+        if not norm:  # tek başına durak işareti vb.
+            continue
         found = any(
-            SequenceMatcher(None, word, tw).ratio() > 0.6
+            SequenceMatcher(None, norm, tw).ratio() > 0.6
             for tw in t_words
         )
         if not found:
-            pronunciation = WORD_PRONUNCIATIONS.get(word, '')
             missing.append({
                 'arabic': word,
-                'pronunciation': pronunciation,
+                'pronunciation': _PRON.get(norm, ''),
             })
     return missing
 
@@ -194,7 +212,20 @@ def dur_to_score(ratio):
     elif ratio >= 0.45: return 30 + (ratio-0.45)/0.20*40
     else:               return max(0, ratio * 67)
 
-def analyze(user_path, ref_path, ayet_no: int = None):
+def expected_text_for(ayet_no, surah_no=None, expected_text=None):
+    """Karşılaştırılacak metni seç.
+    - Uygulama ayetin metnini gönderirse onu kullan (her sure için doğru).
+    - Eski sürümler sure numarası göndermez; onlar için Fatiha davranışı korunur.
+    - Aksi hâlde metin kontrolü yapılmaz (yanlış sureyle karşılaştırmamak için).
+    """
+    if expected_text and normalize_ar(expected_text):
+        return expected_text
+    if surah_no in (None, 1) and ayet_no in FATIHA_TEXTS:
+        return FATIHA_TEXTS[ayet_no]
+    return None
+
+
+def analyze(user_path, ref_path, ayet_no: int = None, surah_no: int = None, expected_text: str = None):
     uy, sr = load_audio(user_path)
     ry, _  = load_audio(ref_path)
 
@@ -261,8 +292,8 @@ def analyze(user_path, ref_path, ayet_no: int = None):
             if not is_arabic:
                 stt_score = 0.0
                 stt_note = f'🔤 Metin: Arapça okunmadı (tespit edilen dil: {detected_lang})'
-            elif ayet_no and ayet_no in FATIHA_TEXTS:
-                expected = FATIHA_TEXTS[ayet_no]
+            elif expected_text_for(ayet_no, surah_no, expected_text):
+                expected = expected_text_for(ayet_no, surah_no, expected_text)
                 sim = text_similarity(transcribed, expected)
                 stt_score = sim * 100
                 missing = find_missing_words(transcribed, expected)
@@ -333,6 +364,8 @@ def analyze_audio():
             return jsonify({'error': 'user_audio ve reference_audio gerekli'}), 400
 
         ayet_no = request.form.get('ayet_no', type=int)
+        surah_no = request.form.get('surah_no', type=int)
+        expected_text = request.form.get('expected_text')
 
         with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as u:
             request.files['user_audio'].save(u.name); up = u.name
@@ -340,7 +373,7 @@ def analyze_audio():
             request.files['reference_audio'].save(r.name); rp = r.name
 
         try:
-            result = analyze(up, rp, ayet_no)
+            result = analyze(up, rp, ayet_no, surah_no, expected_text)
             result['success'] = True
             return jsonify(result), 200
         finally:
